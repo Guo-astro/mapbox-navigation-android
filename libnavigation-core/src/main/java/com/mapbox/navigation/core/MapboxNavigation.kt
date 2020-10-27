@@ -263,6 +263,16 @@ class MapboxNavigation(
     }
 
     /**
+     * Reset the session with the same configuration. The location becomes unknown,
+     * but the [NavigationOptions] stay the same. This can be used to transport the
+     * navigator to a new location.
+     */
+    fun resetTripSession() {
+        directionsSession.routes = emptyList()
+        navigator.reset()
+    }
+
+    /**
      * Return the current [TripSession]'s state.
      * The state is [TripSessionState.STARTED] when the session is active, running a foreground service and
      * requesting and returning location updates.
@@ -342,14 +352,7 @@ class MapboxNavigation(
         tripSession.unregisterAllVoiceInstructionsObservers()
         tripSession.unregisterAllRouteAlertsObservers()
         tripSession.unregisterAllEHorizonObservers()
-        tripSession.route = null
-
-        // TODO replace this with a destroy when nav-native has a destructor
-        navigator.create(
-            navigationOptions.deviceProfile,
-            navigatorConfig,
-            createTilesConfig()
-        )
+        resetTripSession()
 
         navigationSession.unregisterAllNavigationSessionStateObservers()
         fasterRouteController.stop()
