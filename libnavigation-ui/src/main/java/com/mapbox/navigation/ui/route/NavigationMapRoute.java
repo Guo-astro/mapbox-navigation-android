@@ -64,6 +64,8 @@ public class NavigationMapRoute implements LifecycleObserver {
   private MapRouteClickListener mapRouteClickListener;
   @Nullable
   private MapRouteProgressChangeListener mapRouteProgressChangeListener;
+  @Nullable
+  private MapArrivalObserver mapArrivalObserver;
   private boolean isMapClickListenerAdded = false;
   private MapView.OnDidFinishLoadingStyleListener didFinishLoadingStyleListener;
   private boolean isDidFinishLoadingStyleListenerAdded = false;
@@ -77,6 +79,7 @@ public class NavigationMapRoute implements LifecycleObserver {
   @Nullable
   private MapRouteLineInitializedCallback routeLineInitializedCallback;
   private List<RouteStyleDescriptor> routeStyleDescriptors;
+  private VanishingPointStateManager vanishingPointStateManager = new VanishingPointStateManager();
 
   /**
    * Construct an instance of {@link NavigationMapRoute}.
@@ -115,7 +118,8 @@ public class NavigationMapRoute implements LifecycleObserver {
             styleRes,
             belowLayer,
             routeStyleDescriptors,
-            routeLineInitializedCallback
+            routeLineInitializedCallback,
+            vanishingPointStateManager
     );
     this.routeArrow = new MapRouteArrow(mapView, mapboxMap, styleRes, LAYER_ABOVE_UPCOMING_MANEUVER_ARROW);
     this.mapRouteClickListener = new MapRouteClickListener(this.routeLine);
@@ -286,7 +290,9 @@ public class NavigationMapRoute implements LifecycleObserver {
   public void addProgressChangeListener(@NonNull MapboxNavigation navigation) {
     this.navigation = navigation;
     this.mapRouteProgressChangeListener = buildMapRouteProgressChangeListener();
+    this.mapArrivalObserver = buildMapArrivalObserver();
     navigation.registerRouteProgressObserver(mapRouteProgressChangeListener);
+    navigation.registerArrivalObserver(mapArrivalObserver);
   }
 
   /**
@@ -298,6 +304,7 @@ public class NavigationMapRoute implements LifecycleObserver {
   public void removeProgressChangeListener(@Nullable MapboxNavigation navigation) {
     if (navigation != null) {
       navigation.unregisterRouteProgressObserver(mapRouteProgressChangeListener);
+      navigation.unregisterArrivalObserver(mapArrivalObserver);
     }
   }
 
@@ -370,7 +377,8 @@ public class NavigationMapRoute implements LifecycleObserver {
   private MapRouteLine buildMapRouteLine(@NonNull final MapView mapView, @NonNull final MapboxMap mapboxMap,
                                          @StyleRes final int styleRes, @Nullable final String belowLayer,
                                          @Nullable final List<RouteStyleDescriptor> routeStyleDescriptors,
-                                         final MapRouteLineInitializedCallback routeLineInitializedCallback) {
+                                         final MapRouteLineInitializedCallback routeLineInitializedCallback,
+                                         VanishingPointStateManager vanishingPointStateManager) {
     final Context context = mapView.getContext();
     final List<RouteStyleDescriptor> routeStyleDescriptorsToUse = routeStyleDescriptors == null
             ? Collections.emptyList() : routeStyleDescriptors;
@@ -383,7 +391,8 @@ public class NavigationMapRoute implements LifecycleObserver {
         belowLayer,
         layerProvider,
         new MapRouteSourceProvider(),
-        routeLineInitializedCallback
+        routeLineInitializedCallback,
+        vanishingPointStateManager
     );
   }
 
@@ -408,6 +417,7 @@ public class NavigationMapRoute implements LifecycleObserver {
     }
     if (navigation != null) {
       navigation.registerRouteProgressObserver(mapRouteProgressChangeListener);
+      navigation.registerArrivalObserver(mapArrivalObserver);
     }
     if (!isDidFinishLoadingStyleListenerAdded) {
       mapView.addOnDidFinishLoadingStyleListener(didFinishLoadingStyleListener);
@@ -426,6 +436,7 @@ public class NavigationMapRoute implements LifecycleObserver {
     }
     if (navigation != null) {
       navigation.unregisterRouteProgressObserver(mapRouteProgressChangeListener);
+      navigation.unregisterArrivalObserver(mapArrivalObserver);
     }
     if (isDidFinishLoadingStyleListenerAdded) {
       mapView.removeOnDidFinishLoadingStyleListener(didFinishLoadingStyleListener);
@@ -462,7 +473,8 @@ public class NavigationMapRoute implements LifecycleObserver {
         routeLine.retrieveAlternativesVisible(),
         new MapRouteSourceProvider(),
         vanishingPointOffset,
-        routeLineInitializedCallback
+        routeLineInitializedCallback,
+        vanishingPointStateManager
     );
     mapboxMap.removeOnMapClickListener(mapRouteClickListener);
     OnRouteSelectionChangeListener listener = mapRouteClickListener.getOnRouteSelectionChangeListener();
@@ -474,16 +486,24 @@ public class NavigationMapRoute implements LifecycleObserver {
   private void updateProgressChangeListener() {
     if (navigation != null) {
       navigation.unregisterRouteProgressObserver(mapRouteProgressChangeListener);
+      navigation.unregisterArrivalObserver(mapArrivalObserver);
     }
     mapRouteProgressChangeListener = buildMapRouteProgressChangeListener();
+    mapArrivalObserver = buildMapArrivalObserver();
     if (navigation != null) {
       navigation.registerRouteProgressObserver(mapRouteProgressChangeListener);
+      navigation.registerArrivalObserver(mapArrivalObserver);
     }
   }
 
-  @Nullable
+  @NonNull
   private MapRouteProgressChangeListener buildMapRouteProgressChangeListener() {
-    return new MapRouteProgressChangeListener(this.routeLine, routeArrow);
+    return new MapRouteProgressChangeListener(routeLine, routeArrow, vanishingPointStateManager);
+  }
+
+  @NonNull
+  private MapArrivalObserver buildMapArrivalObserver() {
+    return new MapArrivalObserver(vanishingPointStateManager);
   }
 
   /**

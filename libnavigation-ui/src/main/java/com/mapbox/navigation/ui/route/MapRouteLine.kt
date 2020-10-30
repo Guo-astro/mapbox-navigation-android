@@ -98,7 +98,8 @@ internal class MapRouteLine(
     alternativesVisible: Boolean,
     mapRouteSourceProvider: MapRouteSourceProvider,
     vanishPoint: Double,
-    routeLineInitializedCallback: MapRouteLineInitializedCallback?
+    routeLineInitializedCallback: MapRouteLineInitializedCallback?,
+    private val vanishingPointStateManager: VanishingPointStateManager
 ) {
 
     /**
@@ -116,7 +117,8 @@ internal class MapRouteLine(
         belowLayerId: String?,
         layerProvider: RouteLayerProvider,
         mapRouteSourceProvider: MapRouteSourceProvider,
-        routeLineInitializedCallback: MapRouteLineInitializedCallback?
+        routeLineInitializedCallback: MapRouteLineInitializedCallback?,
+        vanishingPointStateManager: VanishingPointStateManager
     ) : this(
         context,
         style,
@@ -129,7 +131,8 @@ internal class MapRouteLine(
         true,
         mapRouteSourceProvider,
         0.0,
-        routeLineInitializedCallback
+        routeLineInitializedCallback,
+        vanishingPointStateManager
     )
 
     private var drawnWaypointsFeatureCollection: FeatureCollection =
@@ -151,7 +154,6 @@ internal class MapRouteLine(
     private var primaryRoute: DirectionsRoute? = null
     var vanishPointOffset: Double = 0.0
         private set
-    private var vanishingPointUpdateInhibited: Boolean = true
 
     private var primaryRoutePoints: RoutePoints? = null
     private var primaryRouteLineGranularDistances: RouteLineGranularDistances? = null
@@ -504,10 +506,6 @@ internal class MapRouteLine(
         lastIndexUpdateTimeNano = System.nanoTime()
     }
 
-    fun inhibitAutomaticVanishingPointUpdate(inhibitVanishingPointUpdate: Boolean) {
-        vanishingPointUpdateInhibited = inhibitVanishingPointUpdate
-    }
-
     fun setVanishingOffset(offset: Double) {
         if (offset >= 0) {
             val expression = getExpressionAtOffset(offset)
@@ -691,20 +689,20 @@ internal class MapRouteLine(
     }
 
     private fun getIdentifiableRouteFeatureDataProvider(directionsRoutes: List<IdentifiableRoute>):
-        () -> List<RouteFeatureData> = {
-            directionsRoutes.parallelMap(
-                ::generateFeatureCollection,
-                ThreadController.getMainScopeAndRootJob().scope
-            )
-        }
+            () -> List<RouteFeatureData> = {
+        directionsRoutes.parallelMap(
+            ::generateFeatureCollection,
+            ThreadController.getMainScopeAndRootJob().scope
+        )
+    }
 
     private fun getRouteFeatureDataProvider(directionsRoutes: List<DirectionsRoute>):
-        () -> List<RouteFeatureData> = {
-            directionsRoutes.parallelMap(
-                ::generateFeatureCollection,
-                ThreadController.getMainScopeAndRootJob().scope
-            )
-        }
+            () -> List<RouteFeatureData> = {
+        directionsRoutes.parallelMap(
+            ::generateFeatureCollection,
+            ThreadController.getMainScopeAndRootJob().scope
+        )
+    }
 
     /**
      * Initializes the layers used for drawing routes.
@@ -912,12 +910,12 @@ internal class MapRouteLine(
 
     private fun calculateRouteGranularDistances(coordinates: List<Point>):
         RouteLineGranularDistances? {
-            return if (coordinates.isNotEmpty()) {
-                calculateGranularDistances(coordinates)
-            } else {
-                null
-            }
+        return if (coordinates.isNotEmpty()) {
+            calculateGranularDistances(coordinates)
+        } else {
+            null
         }
+    }
 
     private fun setAlternativeRoutesSource(featureCollection: FeatureCollection) {
         drawnAlternativeRouteFeatureCollection = featureCollection
@@ -1039,7 +1037,7 @@ internal class MapRouteLine(
      * @param point representing the current position of the puck
      */
     fun updateTraveledRouteLine(point: Point) {
-        if (vanishingPointUpdateInhibited ||
+        if (vanishingPointStateManager.state == VanishingPointState.DISABLED ||
             System.nanoTime() - lastIndexUpdateTimeNano > MAX_ELAPSED_SINCE_INDEX_UPDATE_NANO
         ) {
             return
@@ -1052,25 +1050,36 @@ internal class MapRouteLine(
             val traveledIndex = granularDistances.distancesArray[index]
             val upcomingPoint = traveledIndex.point
 
-            /**
-             * Take the remaining distance from the upcoming point on the route and extends it
-             * by the exact position of the puck.
-             */
-            val remainingDistance =
-                traveledIndex.distanceRemaining + calculateDistance(upcomingPoint, point)
+            val offset =
+                if (vanishingPointStateManager.state == VanishingPointState.REACHED_DESTINATION) {
+                    1.0
+                } else {
+                    /**
+                     * Take the remaining distance from the upcoming point on the route and extends it
+                     * by the exact position of the puck.
+                     */
+                    val remainingDistance =
+                        traveledIndex.distanceRemaining + calculateDistance(upcomingPoint, point)
 
-            /**
-             * Calculate the percentage of the route traveled and update the expression.
-             */
-            if (granularDistances.distance >= remainingDistance) {
-                val offset = (1.0 - remainingDistance / granularDistances.distance)
-                if (offset >= 0) {
-                    val expression = getExpressionAtOffset(offset)
-                    hideCasingLineAtOffset(offset)
-                    hideRouteLineAtOffset(offset)
-                    decorateRouteLine(expression)
+                    /**
+                     * Calculate the percentage of the route traveled and update the expression.
+                     */
+                    if (granularDistances.distance >= remainingDistance) {
+                        (1.0 - remainingDistance / granularDistances.distance)
+                    } else {
+                        1.0
+                    }
                 }
-            }
+
+            /*if (vanishingPointStateManager.state == VanishingPointState.NEAR_DESTINATION &&
+                vanishPointOffset > offset
+            ) {
+                return
+            }*/
+            val expression = getExpressionAtOffset(offset)
+            hideCasingLineAtOffset(offset)
+            hideRouteLineAtOffset(offset)
+            decorateRouteLine(expression)
         }
     }
 
@@ -1314,24 +1323,24 @@ internal class MapRouteLine(
 
         private fun generateFeatureCollection(route: DirectionsRoute, identifier: String?):
             RouteFeatureData {
-                val routeGeometry = LineString.fromPolyline(
-                    route.geometry() ?: "",
-                    Constants.PRECISION_6
-                )
+            val routeGeometry = LineString.fromPolyline(
+                route.geometry() ?: "",
+                Constants.PRECISION_6
+            )
 
-                val routeFeature = when (identifier) {
-                    null -> Feature.fromGeometry(routeGeometry)
-                    else -> Feature.fromGeometry(routeGeometry).also {
-                        it.addBooleanProperty(identifier, true)
-                    }
+            val routeFeature = when (identifier) {
+                null -> Feature.fromGeometry(routeGeometry)
+                else -> Feature.fromGeometry(routeGeometry).also {
+                    it.addBooleanProperty(identifier, true)
                 }
-
-                return RouteFeatureData(
-                    route,
-                    FeatureCollection.fromFeatures(listOf(routeFeature)),
-                    routeGeometry
-                )
             }
+
+            return RouteFeatureData(
+                route,
+                FeatureCollection.fromFeatures(listOf(routeFeature)),
+                routeGeometry
+            )
+        }
 
         /**
          * Calculates line segments based on the legs in the route line and color representation
@@ -1577,3 +1586,4 @@ internal data class RouteLineGranularDistances(
  * The first and last point of adjacent steps overlap and are duplicated in this list.
  */
 internal data class RoutePoints(val nestedList: List<List<List<Point>>>, val flatList: List<Point>)
+

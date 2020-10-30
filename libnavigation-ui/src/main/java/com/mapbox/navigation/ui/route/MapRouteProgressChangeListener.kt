@@ -1,7 +1,6 @@
 package com.mapbox.navigation.ui.route
 
 import com.mapbox.navigation.base.trip.model.RouteProgress
-import com.mapbox.navigation.base.trip.model.RouteProgressState
 import com.mapbox.navigation.core.trip.session.RouteProgressObserver
 
 /**
@@ -13,7 +12,8 @@ import com.mapbox.navigation.core.trip.session.RouteProgressObserver
  */
 internal class MapRouteProgressChangeListener(
     private val routeLine: MapRouteLine,
-    private val routeArrow: MapRouteArrow
+    private val routeArrow: MapRouteArrow,
+    private val vanishingPointStateManager: VanishingPointStateManager
 ) : RouteProgressObserver {
 
     private var restoreRouteArrowVisibilityFun: DeferredRouteUpdateFun? = null
@@ -47,16 +47,7 @@ internal class MapRouteProgressChangeListener(
                 }
             }
         }
-
-        when (routeProgress.currentState) {
-            RouteProgressState.LOCATION_TRACKING ->
-                routeLine.inhibitAutomaticVanishingPointUpdate(false)
-            RouteProgressState.ROUTE_COMPLETE -> {
-                routeLine.inhibitAutomaticVanishingPointUpdate(true)
-                routeLine.setVanishingOffset(1.0)
-            }
-            else -> routeLine.inhibitAutomaticVanishingPointUpdate(true)
-        }
+        vanishingPointStateManager.onNewRouteProgress(routeProgress)
     }
 
     private fun getRestoreArrowVisibilityFun(isVisible: Boolean): DeferredRouteUpdateFun = {
